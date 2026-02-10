@@ -13,19 +13,23 @@ import cartopy.feature as cfeature
 # main.py
 #%%
 from vertical_indexing import metpy_find_level_index,metpy_compute_heights
-from stations_utils import load_stations, select_station, all_stations, map_stations_to_model_levels
+from stations_utils import load_stations, select_station #, all_stations, map_stations_to_model_levels
 from horizontal_indexing import nearest_grid_index
-from file_utils import stations_path, species_file, T_file, pl_file,species,orog_file,RH_file
-
+from file_utils import T_file,RH_file,pl_file,orog_file,stations_path,species_file,species
+from plots import plot_variable_on_map,plot_rectangles,save_figure,plot_cv_vs_distance,plot_cv_bars_distance_both,plot_ratio_bars
+from calculation import (compute_cumulative_sector_tables,compute_ring_sector_masks,sector_stats,
+                         sector_stats_unweighted,sector_stats_weighted,compute_sector_tables_generic
+                         ,add_distance_bins,build_distance_dataframe,stats_by_distance_bins,
+                         cumulative_mean_ratio_to_center,distance_cumulative_mean_ratio_to_center)
 
 #%%
 def main():
     ###########################################
     idx=5 #index of station of the stations_file,can be put to None
     name=None #name of the station,can be put to None
-    cell_nums = 15 #numb of cells that will get plotted n**2;determines also radii,number of sectors
+    cell_nums = 14 #numb of cells that will get plotted n**2;determines also radii,number of sectors
     d_zoom_species=1 #zoom of plots
-    d_zoom_topo=40.0  #zoom of topo in fig3,5
+    d_zoom_topo=20.0  #zoom of topo in fig3
     zoom_map= 45.0   #extent of map in fig4
     radii = list(range(1, cell_nums+1)) #(range(1,cell_nums+1)) #number of sectors
     dist_bins_km = [10,20,30,40,50,60,70,80,90,100]
@@ -45,6 +49,8 @@ def main():
     ds_PL = xr.open_dataset(pl_file) #nc file with pressure levels for the same t
     ds_orog = xr.open_dataset(orog_file) #nc file with orography
     ds_RH=xr.open_dataset(RH_file)   #nc file with relative humidity
+    lats = ds_species['lat'].values #latitudes of the model
+    lons = ds_species['lon'].values #longitudes of the model
     print(f"\nSelected station: {name} (lat={lat_s}, lon={lon_s}, alt={alt_s} m)")
     #------------------------------------------------------------------
     i,j= nearest_grid_index(lat_s,lon_s,lats,lons) #func that calculates the index the station falls into horizontally
@@ -53,7 +59,7 @@ def main():
         Nx = lons.shape[0]
     else:
         Ny, Nx = lats.shape
-    #print(f"\nLoading domain subset: i={i1}:{i2}, j={j1}:{j2} for plotting")
+    
     # --- SMALL box (species) ---
     i1_s, i2_s = max(0, i - cell_nums), min(Ny - 1, i + cell_nums)
     j1_s, j2_s = max(0, j - cell_nums), min(Nx - 1, j + cell_nums)
@@ -160,7 +166,156 @@ def main():
     species_prof_ppb = species_prof * (MW_air / MW_O3) * 1e9
     units_ppb = "ppb"
     meta["units"] = units_ppb
+    #------------------------------------------------------
+    sector_dfs, sector_masks = compute_sector_tables_generic(
+    ii, jj, lats_small, lons_small, data_arr_ppb, species, radii=radii)
+    '''
+    sector_names = [f"S{k+1}" for k in range(len(sector_dfs))]
+    
+    print("\nSector statistics:")
+    for nm, df in zip(sector_names, sector_dfs):
+     st = sector_stats(df, species)
+     print(
+        f"{nm}: n={st['n']}, mean={st['mean']:.3e}, CV={st['cv']:.4f}, "
+        f"median={st['median']:.3e}, IQR={st['iqr']:.3e}"
+    )
+    '''
+    cum_dfs, cum_masks = compute_cumulative_sector_tables(
+    sector_masks,
+    lats_small,
+    lons_small,
+    data_arr_ppb,
+    species
+)
+    def add_area_weights(df, lat_col="lat", w_col="w_area"):
+     lat_rad = np.deg2rad(pd.to_numeric(df[lat_col], errors="coerce").to_numpy(dtype=float))
+     w = np.cos(lat_rad)
+     w = np.clip(w, 0.0, None)
+     df[w_col] = w
+     return df
+
+    sector_dfs = [add_area_weights(df.copy()) for df in sector_dfs]
+    cum_dfs    = [add_area_weights(df.copy()) for df in cum_dfs]
+    '''
+    print("\nRING SECTORS (UNWEIGHTED vs AREA-WEIGHTED)")
+    for k, df in enumerate(sector_dfs, start=1):
+     su = sector_stats_unweighted(df, species)
+     sw = sector_stats_weighted(df, species, w_col="w_area")
+     print(
+        f"S{k}: mean={su['mean']:.3f}, std={su['std']:.3f}, cv={su['cv']:.3f}, "
+        f"med={su['median']:.3f}, IQR={su['iqr']:.3f}  ||  "
+        f"mean_w={sw['mean_w']:.3f}, std_w={sw['std_w']:.3f}, cv_w={sw['cv_w']:.3f}, "
+        f"med_w={sw['median_w']:.3f}, IQR_w={sw['iqr_w']:.3f}"
+    )
+    '''
+    print("\nCUMULATIVE SECTORS (UNWEIGHTED vs AREA-WEIGHTED)")
+
+    for k, df in enumerate(cum_dfs, start=1):
+     su = sector_stats_unweighted(df, species)
+     sw = sector_stats_weighted(df, species, w_col="w_area")
+     print(
+        f"C{k}: mean={su['mean']:.3f}, std={su['std']:.3f}, cv={su['cv']:.3f}, "
+        f"med={su['median']:.3f}, IQR={su['iqr']:.3f}  ||  "
+        f"mean_w={sw['mean_w']:.3f}, std_w={sw['std_w']:.3f}, cv_w={sw['cv_w']:.3f}, "
+        f"med_w={sw['median_w']:.3f}, IQR_w={sw['iqr_w']:.3f}"
+    )
+    ring_stats_unw = []
+    ring_stats_w   = []
+
+    for df in sector_dfs:
+     ring_stats_unw.append(sector_stats_unweighted(df, species))
+     ring_stats_w.append(sector_stats_weighted(df, species, w_col="w_area"))
+
+    cum_stats_unw = []
+    cum_stats_w   = []
+
+    for df in cum_dfs:
+      cum_stats_unw.append(sector_stats_unweighted(df, species))
+      cum_stats_w.append(sector_stats_weighted(df, species, w_col="w_area"))
+    LON2D, LAT2D = np.meshgrid(lons_small, lats_small)
+    dlat = np.deg2rad(np.abs(lats_small[1] - lats_small[0]))
+    dlon = np.deg2rad(np.abs(lons_small[1] - lons_small[0]))
+    w_area = (EARTH_RADIUS_KM * 1000.0)**2 * dlat * dlon * np.cos(np.deg2rad(LAT2D))
+    w_area = np.clip(w_area, 0.0, None)
+    w_area = np.cos(np.deg2rad(lats_small))[:, None] * np.ones((1, len(lons_small)))
+    df_dist = build_distance_dataframe(
+    lats_small,
+    lons_small,
+    data_arr_ppb,
+    lat_s,
+    lon_s,
+    species,
+    w_area=w_area,
+)
+
+    df_cv_unw = stats_by_distance_bins(
+    df_dist, species, dist_bins_km
+)
+
+    df_cv_w = stats_by_distance_bins(
+    df_dist, species, dist_bins_km, w_col="w_area"
+)
+
+    # Build distance dataframe
+    df_dist = build_distance_dataframe(
+    lats_small, lons_small, data_arr_ppb,
+    lat_s, lon_s,
+    var_name=species,
+    w_area=w_area,   # cos(lat) grid, same shape as data_arr
+)
+
+# Define distance bins (km)
+
+# Add bins (USED BY BOTH CV + BOXPLOTS)
+    df_dist = add_distance_bins(df_dist, radii_km)
+    print('df_dist')
+    print(df_dist)
+    print('-----------------')
+    print('df_cv_unweighted')
+    print(df_cv_unw)
+    print('----------------')
+    print('df_cv_w')
+    print(df_cv_w)
+    fig_cv, ax_cv = plot_cv_vs_distance(df_cv_unw, df_cv_w,
+    title=f"{species} CV vs distance ({name})")
+    
+    plt.show()
+    fig, ax = plot_cv_bars_distance_both(
+    df_cv_unw, df_cv_w,
+    title=f"{species} CV vs distance ({name})",
+    reverse=False  
+)
+    plt.show()
+    center_value = float(data_arr_ppb[ii, jj])  # EXACTLY the same field used in sector tables
+  # same level you selected
+    df_ratio_cum = cumulative_mean_ratio_to_center(
+    cum_dfs=cum_dfs,
+    var_name=species,
+    center_value=center_value,
+    labels=[f"C{k}" for k in range(1, len(cum_dfs)+1)],
+    w_col=None,           # or "w_area" if you want weighted
+)
+
+    fig_r1, ax_r1 = plot_ratio_bars(
+    df_ratio_cum,
+    title=f"{species}: cumulative sector mean / center"
+)
+    plt.show()
+    df_ratio_dist = distance_cumulative_mean_ratio_to_center(
+    df_dist=df_dist,
+    var_name=species,
+    center_value=center_value,
+    d_bins_km=dist_bins_km,
+    w_col=None,           # or "w_area"
+)
+
+    fig_r2, ax_r2 = plot_ratio_bars(
+    df_ratio_dist,
+    title=f"{species}: cumulative distance mean / center"
+)
+    plt.show()
     #---------------------------------------------------
+    '''
     fig1, ax1, im1 = plot_variable_on_map(
     lats_small, lons_small, data_arr_ppb,
     lon_s, lat_s,
@@ -285,6 +440,8 @@ def main():
 
     ax4.legend(loc="upper right")
     ax4.set_title(f"Stations in China", pad=18)
+    plt.show()
+    
     #temperature with height
     fig_TZ, ax_TZ = plot_profile_T_Z(T_prof, z_prof, idx_level,
                                  time_str=time_str, z_units="km",meta=meta)
@@ -292,3 +449,14 @@ def main():
     fig_SZ, ax_SZ = plot_profile_species_Z(
     z_prof,species_prof_ppb,idx_level,
     species_name=species,species_units=units_ppb,time_str=time_str,z_units="km",meta=meta)
+
+
+    save_figure(fig1, out_dir, f"map_{species}_{name}_{time_str}")
+    save_figure(fig2, out_dir, f"map_with sectors_{species}_{name}_{time_str}")
+    save_figure(fig3,out_dir, f"topo_map_{name}")
+    '''
+if __name__ == "__main__":
+    main()
+
+
+# %%

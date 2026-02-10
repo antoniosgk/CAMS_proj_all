@@ -333,3 +333,123 @@ def _sort_by_pressure_with_index(p_hPa, idx_level, *arrays):
     idx_sorted = int(np.where(order == idx_level)[0][0])
 
     return (p_sorted, *sorted_arrays, idx_sorted)
+def plot_cv_vs_distance(df_unw, df_w=None, ax=None, title=None):
+    """
+    Line plot of CV vs distance.
+    """
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    ax.plot(df_unw["dmax_km"], df_unw["cv"], marker="o", label="Unweighted")
+    
+    if df_w is not None:
+        ax.plot(df_w["dmax_km"], df_w["cv_w"], marker="s", label="Area-weighted")
+
+    ax.set_xlabel("Distance from station (km)")
+    ax.set_ylabel("Coefficient of Variation")
+    ax.grid(True, linestyle="--", alpha=0.4)
+    ax.legend()
+
+    if title:
+        ax.set_title(title)
+
+    return fig, ax
+def plot_cv_bars_distance_both(df_cv_unw, df_cv_w, ax=None, title=None, reverse=True):
+    """
+    Grouped bar plot of CV vs distance bins:
+    - Unweighted: 'cv'
+    - Area-weighted: 'cv_w'
+
+    Both DataFrames must refer to the same bins and contain:
+      - either 'bin_label' OR 'dmax_km'
+    """
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    du = df_cv_unw.copy()
+    dw = df_cv_w.copy()
+
+    if "cv" not in du.columns:
+        raise KeyError("df_cv_unw must contain column 'cv'.")
+    if "cv_w" not in dw.columns:
+        raise KeyError("df_cv_w must contain column 'cv_w'.")
+
+    # Build labels consistently from dmax_km (preferred) or bin_label
+    def _make_labels(df):
+        if "bin_label" in df.columns:
+            return df["bin_label"].astype(str)
+        if "dmax_km" in df.columns:
+            return df["dmax_km"].apply(lambda x: f"≤ {float(x):g} km")
+        raise KeyError("DataFrame must contain either 'bin_label' or 'dmax_km'.")
+
+    du["label"] = _make_labels(du)
+    dw["label"] = _make_labels(dw)
+
+    du["cv"] = pd.to_numeric(du["cv"], errors="coerce")
+    dw["cv_w"] = pd.to_numeric(dw["cv_w"], errors="coerce")
+
+    du = du[np.isfinite(du["cv"])].dropna(subset=["label"])
+    dw = dw[np.isfinite(dw["cv_w"])].dropna(subset=["label"])
+
+    # Merge on labels to ensure same order/bins
+    m = du[["label", "cv"]].merge(dw[["label", "cv_w"]], on="label", how="inner")
+
+    # If dmax_km exists in both, sort by numeric bin edge for correct order
+    if ("dmax_km" in du.columns) and ("dmax_km" in dw.columns):
+        # rebuild a numeric key for sorting using du's dmax_km (assumes same bins)
+        du_key = du[["label", "dmax_km"]].drop_duplicates()
+        m = m.merge(du_key, on="label", how="left")
+        m = m.sort_values("dmax_km")
+        m = m.drop(columns=["dmax_km"])
+    # else keep merge order
+
+    if reverse:
+        m = m.iloc[::-1].reset_index(drop=True)
+
+    labels = m["label"].tolist()
+    y_unw = m["cv"].to_numpy(dtype=float)
+    y_w = m["cv_w"].to_numpy(dtype=float)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(9, 4))
+    else:
+        fig = ax.figure
+
+    x = np.arange(len(labels))
+    width = 0.38
+
+    ax.bar(x - width/2, y_unw, width=width, label="Unweighted")
+    ax.bar(x + width/2, y_w,   width=width, label="Area-weighted")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=0)
+    ax.set_ylabel("Coefficient of Variation")
+    ax.grid(True, linestyle="--", alpha=0.35)
+    if title:
+        ax.set_title(title)
+    ax.legend()
+
+    fig.tight_layout()
+    return fig, ax
+def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value"):
+    """
+    df_ratio: DataFrame with columns ["label", "ratio"]
+    """
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    ax.bar(df_ratio["label"], df_ratio["ratio"])
+    ax.axhline(1.0, linestyle="--", linewidth=1)  # reference line at 1
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel("")
+    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
+
+    if title:
+        ax.set_title(title)
+
+    return fig, ax
