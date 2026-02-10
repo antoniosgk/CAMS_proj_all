@@ -1,26 +1,46 @@
+# calculation.py
 import numpy as np
 import pandas as pd
+import xarray as xr
+
+from file_utils import build_paths, iter_timestamps, OrogCache
+from horizontal_indexing import nearest_grid_index, make_small_box_indices, add_distance_bins
+from vertical_indexing import (
+    extract_smallbox_ppb_optionA_fixed_k,
+    extract_smallbox_ppb_optionHeight_fixed_z,
+)
+
+EARTH_RADIUS_KM = 6371.0
 
 
+# -----------------------------
+# Units conversion
+# -----------------------------
+def to_ppb_mmr(data_arr, species):
+    """
+    Convert mass mixing ratio (kg/kg) to ppb using MW_air/MW_species * 1e9.
+    Extend MW_map if you add species.
+    """
+    MW_air = 28.9647
+    MW_map = {"O3": 48.0}
+    if species not in MW_map:
+        raise ValueError(f"No MW defined for species={species}. Add it to MW_map.")
+    return np.asarray(data_arr, dtype=float) * (MW_air / MW_map[species]) * 1e9
+
+
+# -----------------------------
+# Sector masks + stats
+# -----------------------------
 def safe_slice(low, high, maxN):
-    """
-    Safe slice helper:
-    - low, high are like Python slice bounds (high is exclusive)
-    - maxN is the size of the axis
-    """
     return slice(max(low, 0), min(high, maxN))
-
 
 
 def compute_ring_sector_masks(ii, jj, Ny, Nx, radii):
     """
-    Build ring sectors around (ii, jj) for arbitrary radii.
-
-    radii: list/tuple of integers, e.g. [1,2,3,4]
-           Sector k is the square (radius=radii[k]) minus square (radius=radii[k-1]).
-           The first sector is the (2*r+1)x(2*r+1) square including the center.
-
-    Returns: list of masks [S1, S2, ...]
+    Create disjoint ring masks around (ii,jj):
+      S1 = box(r1)
+      S2 = box(r2) - box(r1)
+      ...
     """
     masks = []
     prev = np.zeros((Ny, Nx), dtype=bool)
@@ -28,27 +48,20 @@ def compute_ring_sector_masks(ii, jj, Ny, Nx, radii):
     for r in radii:
         box = np.zeros((Ny, Nx), dtype=bool)
         box[safe_slice(ii - r, ii + r + 1, Ny),
-            safe_slice(jj - r, jj + r + 1, Nx)] = True  #True 
-
+            safe_slice(jj - r, jj + r + 1, Nx)] = True
         ring = box & (~prev)
         masks.append(ring)
         prev = box
 
     return masks
 
+
 def sector_table(mask, lats_small, lons_small, data_arr, var_name):
     """
-    Build a DataFrame with indices and values for a given sector mask.
-
-    mask      : boolean 2D array (Ny, Nx)
-    lats_small: 1D or 2D array of latitudes matching mask shape
-    lons_small: 1D or 2D array of longitudes matching mask shape
-    data_arr  : 2D array (Ny, Nx) with variable values
-    var_name  : column name for the variable
+    Convert a mask + 2D field into a DataFrame of selected grid cells.
     """
     iy, ix = np.where(mask)
 
-    # Handle 1D vs 2D lat/lon
     if lats_small.ndim == 1 and lons_small.ndim == 1:
         lat_vals = lats_small[iy]
         lon_vals = lons_small[ix]
@@ -67,82 +80,258 @@ def sector_table(mask, lats_small, lons_small, data_arr, var_name):
     })
 
 
-
-
-def sector_stats(df, var_name):
-    """
-    Compute summary stats for a sector:
-    mean, std, CV, median, IQR (Q3-Q1), n
-    """
-    vals = pd.to_numeric(df[var_name], errors="coerce").to_numpy(dtype=float)
-    vals = vals[np.isfinite(vals)]
-
-    if vals.size == 0:
-        return {"n": 0, "mean": np.nan, "std": np.nan, "cv": np.nan,
-                "median": np.nan, "q1": np.nan, "q3": np.nan, "iqr": np.nan}
-
-    mean = float(np.mean(vals))
-    std = float(np.std(vals))
-    cv = float(std / mean) if mean != 0 else np.nan
-
-    q1 = float(np.percentile(vals, 25))
-    median = float(np.percentile(vals, 50))
-    q3 = float(np.percentile(vals, 75))
-    iqr = float(q3 - q1)
-
-    return {"n": int(vals.size), "mean": mean, "std": std, "cv": cv,
-            "median": median, "q1": q1, "q3": q3, "iqr": iqr}
-
 def compute_sector_tables_generic(ii, jj, lats_small, lons_small, data_arr, var_name, radii):
     Ny, Nx = data_arr.shape
     masks = compute_ring_sector_masks(ii, jj, Ny, Nx, radii)
-
     dfs = [sector_table(m, lats_small, lons_small, data_arr, var_name) for m in masks]
     return dfs, masks
 
+
 def cumulative_sector_masks(sector_masks):
-    """
-    Build cumulative sector masks.
-
-    Input
-    -----
-    sector_masks : list of boolean masks
-        [S1, S2, S3, ...] where each is a disjoint ring
-
-    Returns
-    -------
-    cumulative_masks : list of boolean masks
-        [C1, C2, C3, ...]
-        Ck = union of S1 ... Sk
-    """
-    cumulative_masks = []
     running = np.zeros_like(sector_masks[0], dtype=bool)
-
+    out = []
     for S in sector_masks:
         running = running | S
-        cumulative_masks.append(running.copy())
+        out.append(running.copy())
+    return out
 
-    return cumulative_masks
 
-def compute_cumulative_sector_tables(
-    sector_masks,
-    lats_small,
-    lons_small,
-    data_arr,
-    var_name,
+def compute_cumulative_sector_tables(sector_masks, lats_small, lons_small, data_arr, var_name):
+    cum_masks = cumulative_sector_masks(sector_masks)
+    dfs = [sector_table(m, lats_small, lons_small, data_arr, var_name) for m in cum_masks]
+    return dfs, cum_masks
+
+
+def sector_stats_unweighted(df, var_col):
+    """
+    Return: n, mean, std, cv, median, q25, q75, iqr
+    """
+    x = pd.to_numeric(df[var_col], errors="coerce").to_numpy(dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return {"n": 0, "mean": np.nan, "std": np.nan, "cv": np.nan,
+                "median": np.nan, "q25": np.nan, "q75": np.nan, "iqr": np.nan}
+
+    mean = float(np.mean(x))
+    std = float(np.std(x, ddof=0))
+    median = float(np.median(x))
+    q25 = float(np.quantile(x, 0.25))
+    q75 = float(np.quantile(x, 0.75))
+    iqr = float(q75 - q25)
+    cv = float(std / mean) if np.isfinite(mean) and mean != 0 else np.nan
+
+    return {"n": int(x.size), "mean": mean, "std": std, "cv": cv,
+            "median": median, "q25": q25, "q75": q75, "iqr": iqr}
+
+
+# -----------------------------
+# Distance dataframe
+# -----------------------------
+def haversine_km(lat1, lon1, lat2, lon2):
+    """
+    Vectorized haversine distance (km). lat/lon in degrees.
+    """
+    lat1 = np.deg2rad(lat1); lon1 = np.deg2rad(lon1)
+    lat2 = np.deg2rad(lat2); lon2 = np.deg2rad(lon2)
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0)**2
+    c = 2 * np.arcsin(np.sqrt(a))
+    return EARTH_RADIUS_KM * c
+
+
+def build_distance_dataframe(lats_small, lons_small, data_arr, lat_s, lon_s, var_name, w_area=None):
+    """
+    Create DataFrame with distance_km from station for each small-box grid cell.
+    """
+    if lats_small.ndim == 1 and lons_small.ndim == 1:
+        LON2D, LAT2D = np.meshgrid(lons_small, lats_small)
+    else:
+        LAT2D = lats_small
+        LON2D = lons_small
+
+    dist_km = haversine_km(lat_s, lon_s, LAT2D, LON2D)
+
+    df = pd.DataFrame({
+        "lat": LAT2D.ravel(),
+        "lon": LON2D.ravel(),
+        "distance_km": dist_km.ravel(),
+        var_name: np.asarray(data_arr).ravel(),
+    })
+
+    if w_area is not None:
+        df["w_area"] = np.asarray(w_area).ravel()
+
+    return df
+
+
+# -----------------------------
+# Period runner (your requested output)
+# -----------------------------
+def run_period_cumulative_sector_timeseries(
+    base_path, product, species,
+    station,
+    start_dt, end_dt,
+    cell_nums,
+    radii_km,
+    mode="A",          # "A" or "HEIGHT"
+    step_minutes=30,
 ):
     """
-    Build DataFrames for cumulative sectors.
+    Builds a per-30min DataFrame with:
+      - CUM sectors: C1..Ck (cumulative square rings)
+      - BIN distance bins: 0–10, 10–20, ... (non-cumulative bins from add_distance_bins)
+
+    Returns:
+      df_per_timestep: rows per timestamp x (CUM sectors + BIN bins)
+      df_temporal_summary: temporal aggregates per sector (mean/std/median over time)
     """
-    cumulative_masks = cumulative_sector_masks(sector_masks)
+    lat_s = float(station["Latitude"])
+    lon_s = float(station["Longitude"])
+    alt_s = float(station["Altitude"])
+    station_name = station.get("Station_Name", "station")
 
-    dfs = []
-    for k, mask in enumerate(cumulative_masks, start=1):
-        df = sector_table(mask, lats_small, lons_small, data_arr, var_name)
-        dfs.append(df)
+    # --- Find first existing timestamp for reading grid ---
+    lats = lons = None
+    first_found = None
+    for d0, t0 in iter_timestamps(start_dt, end_dt, step_minutes):
+        sp0, _, _, _, _ = build_paths(base_path, product, species, d0, t0)
+        try:
+            ds0 = xr.open_dataset(sp0)
+            lats = ds0["lat"].values
+            lons = ds0["lon"].values
+            ds0.close()
+            first_found = (d0, t0)
+            break
+        except FileNotFoundError:
+            continue
 
-    return dfs, cumulative_masks
+    if first_found is None:
+        raise FileNotFoundError("No species files found in the requested period.")
 
+    i, j = nearest_grid_index(lat_s, lon_s, lats, lons)
+    Ny, Nx = (lats.shape[0], lons.shape[0]) if np.ndim(lats) == 1 else lats.shape
+    i1_s, i2_s, j1_s, j2_s, ii, jj = make_small_box_indices(i, j, Ny, Nx, cell_nums)
+
+    lats_small = lats[i1_s:i2_s + 1]
+    lons_small = lons[j1_s:j2_s + 1]
+    radii = list(range(1, cell_nums + 1))
+
+    orog_cache = OrogCache()
+    rows = []
+
+    for date, time in iter_timestamps(start_dt, end_dt, step_minutes):
+        spf, Tf, PLf, RHf, orogf = build_paths(base_path, product, species, date, time)
+
+        try:
+            ds_species = xr.open_dataset(spf)
+            ds_T = xr.open_dataset(Tf)
+            ds_PL = xr.open_dataset(PLf)
+            ds_RH = xr.open_dataset(RHf)
+        except FileNotFoundError:
+            # skip missing timestep
+            for nm in ("ds_species", "ds_T", "ds_PL", "ds_RH"):
+                obj = locals().get(nm, None)
+                if obj is not None:
+                    try:
+                        obj.close()
+                    except Exception:
+                        pass
+            continue
+
+        ds_orog = orog_cache.get(orogf)
+
+        # --- vertical selection: build 2D ppb grid in the small box ---
+        if mode.upper() == "A":
+            grid_ppb, meta_v = extract_smallbox_ppb_optionA_fixed_k(
+                ds_species, ds_T, ds_PL, ds_RH, ds_orog,
+                species, alt_s,
+                i, j, i1_s, i2_s, j1_s, j2_s,
+                to_ppb_fn=to_ppb_mmr,
+            )
+            z_target = meta_v["z_star_m"]
+            k_center = meta_v["k_star"]
+        elif mode.upper() == "HEIGHT":
+            grid_ppb, meta_v = extract_smallbox_ppb_optionHeight_fixed_z(
+                ds_species, ds_T, ds_PL, ds_RH, ds_orog,
+                species, alt_s,
+                i, j, i1_s, i2_s, j1_s, j2_s,
+                to_ppb_fn=to_ppb_mmr,
+            )
+            z_target = meta_v["z_target_m"]
+            k_center = meta_v["k_star_center"]
+        else:
+            raise ValueError("mode must be 'A' or 'HEIGHT'")
+
+        # --- CUMULATIVE SECTORS (C1..Ck) ---
+        sector_dfs, sector_masks = compute_sector_tables_generic(
+            ii, jj, lats_small, lons_small, grid_ppb, species, radii=radii
+        )
+        cum_dfs, _ = compute_cumulative_sector_tables(
+            sector_masks, lats_small, lons_small, grid_ppb, species
+        )
+
+        for k, df_c in enumerate(cum_dfs, start=1):
+            st = sector_stats_unweighted(df_c, species)
+            rows.append({
+                "station": station_name,
+                "date": date,
+                "time": time,
+                "timestamp": f"{date} {time}",
+                "mode": mode.upper(),
+                "sector_type": "CUM",
+                "sector": f"C{k}",
+                "radius": radii[k - 1],
+                "k_star_center": int(k_center),
+                "z_target_m": float(z_target),
+                **st,
+            })
+
+        # --- DISTANCE BINS (0–10, 10–20, ...) ---
+        df_dist = build_distance_dataframe(
+            lats_small, lons_small, grid_ppb, lat_s, lon_s, var_name=species, w_area=None
+        )
+        df_dist = add_distance_bins(df_dist, radii_km=radii_km)
+
+        # group by bin_label (non-cumulative bins)
+        for bin_label, df_bin in df_dist.groupby("bin_label", dropna=True):
+            st = sector_stats_unweighted(df_bin, species)
+            dmax = float(df_bin["dmax_km"].iloc[0])  # upper edge for that bin
+            rows.append({
+                "station": station_name,
+                "date": date,
+                "time": time,
+                "timestamp": f"{date} {time}",
+                "mode": mode.upper(),
+                "sector_type": "BIN",
+                "sector": str(bin_label),   # e.g. "10–20"
+                "radius": dmax,
+                "k_star_center": int(k_center),
+                "z_target_m": float(z_target),
+                **st,
+            })
+
+        for ds in (ds_species, ds_T, ds_PL, ds_RH):
+            ds.close()
+
+    orog_cache.close_all()
+
+    df_per_timestep = pd.DataFrame(rows)
+    if df_per_timestep.empty:
+        return df_per_timestep, df_per_timestep
+
+    # --- temporal summary over time for each sector ---
+    stat_cols = [c for c in ["n", "mean", "std", "cv", "median", "iqr", "q25", "q75"] if c in df_per_timestep.columns]
+    summary = (
+        df_per_timestep
+        .groupby(["station", "mode", "sector_type", "sector"], as_index=False)[stat_cols]
+        .agg(["mean", "std", "median"])
+    )
+    summary.columns = [f"{a}_{b}" if b else a for (a, b) in summary.columns.to_flat_index()]
+    df_temporal_summary = summary
+
+    return df_per_timestep, df_temporal_summary
 def weighted_quantile(x, w, q):
     """
     Weighted quantile for 1D arrays.
@@ -164,9 +353,6 @@ def weighted_quantile(x, w, q):
     cw = np.cumsum(w)
     cw = cw / cw[-1]
     return float(np.interp(q, cw, x))
-
-
-
 def sector_stats_unweighted(df, var_col):
     x = df[var_col].to_numpy(dtype=float)
     x = x[np.isfinite(x)]
@@ -214,61 +400,6 @@ def sector_stats_weighted(df, var_name, w_col="w_area"):
     return {"n": int(vals.size),
             "mean_w": mean_w, "std_w": std_w, "cv_w": cv_w,
             "median_w": med_w, "q1_w": q1_w, "q3_w": q3_w, "iqr_w": iqr_w}
-# calculation.py
-import numpy as np
-import pandas as pd
-
-EARTH_RADIUS_KM = 6371.0
-
-
-def haversine_km(lat1, lon1, lat2, lon2):
-    """
-    Vectorized haversine distance (km).
-    lat/lon in degrees.
-    """
-    lat1 = np.deg2rad(lat1)
-    lon1 = np.deg2rad(lon1)
-    lat2 = np.deg2rad(lat2)
-    lon2 = np.deg2rad(lon2)
-
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-
-    a = np.sin(dlat / 2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0)**2
-    c = 2 * np.arcsin(np.sqrt(a))
-    return EARTH_RADIUS_KM * c
-
-def build_distance_dataframe(
-    lats_small,
-    lons_small,
-    data_arr,
-    lat_s,
-    lon_s,
-    var_name,
-    w_area=None,
-):
-    """
-    Create DataFrame with distance (km) from station for each grid cell.
-    """
-    if lats_small.ndim == 1 and lons_small.ndim == 1:
-        LON2D, LAT2D = np.meshgrid(lons_small, lats_small)
-    else:
-        LAT2D = lats_small
-        LON2D = lons_small
-
-    dist_km = haversine_km(lat_s, lon_s, LAT2D, LON2D)
-
-    df = pd.DataFrame({
-        "lat": LAT2D.ravel(),
-        "lon": LON2D.ravel(),
-        "distance_km": dist_km.ravel(),
-        var_name: data_arr.ravel(),
-    })
-
-    if w_area is not None:
-        df["w_area"] = w_area.ravel()
-
-    return df
 def stats_by_distance_bins(
     df,
     var_name,
@@ -292,38 +423,6 @@ def stats_by_distance_bins(
         records.append(stats)
 
     return pd.DataFrame(records)
-
-
-def add_distance_bins(df, radii_km):
-    """
-    Add distance-bin labels to a distance DataFrame.
-
-    radii_km: e.g. [5, 10, 20, 50, 100]
-    Produces bins: (0–5], (5–10], ...
-    """
-    radii_km = np.asarray(radii_km, dtype=float)
-    edges = np.concatenate(([0.0], radii_km))
-
-    labels = [f"{int(edges[i])}–{int(edges[i+1])}"
-              for i in range(len(edges) - 1)]
-
-    df = df.copy()
-    df["bin_label"] = pd.cut(
-        df["distance_km"],
-        bins=edges,
-        labels=labels,
-        include_lowest=True,
-        right=True,
-    )
-
-    df["dmax_km"] = df["bin_label"].map(
-        {lab: radii_km[i] for i, lab in enumerate(labels)}
-    )
-
-    return df
-
-
-
 def cumulative_mean_ratio_to_center(cum_dfs, var_name, center_value, labels=None, w_col=None):
     """
     cum_dfs: list of cumulative DataFrames [C1, C2, ...]

@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 from matplotlib.patches import Rectangle
-from calculation import weighted_quantile, haversine_km
+from calculation import haversine_km
 import matplotlib.ticker as ticker
 import cartopy.crs as ccrs
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
