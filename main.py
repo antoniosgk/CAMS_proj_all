@@ -20,7 +20,7 @@ from file_utils import T_file,RH_file,pl_file,orog_file,stations_path,species_fi
 from plots import plot_variable_on_map,plot_rectangles,save_figure,plot_cv_vs_distance,plot_cv_bars_distance_both,plot_ratio_bars
 from calculation import (compute_cumulative_sector_tables,compute_ring_sector_masks,sector_stats_weighted,weighted_quantile,
                          sector_stats_unweighted,compute_sector_tables_generic
-                         ,add_distance_bins,build_distance_dataframe,stats_by_distance_bins,weighted_quantile,
+                         ,add_distance_bins,build_distance_dataframe,stats_by_distance_bins,weighted_quantile,compute_w_area_small,
                          cumulative_mean_ratio_to_center,distance_cumulative_mean_ratio_to_center,run_period_cumulative_sector_timeseries)
 from file_utils import base_path, product, species, stations_path
 from stations_utils import load_stations, select_station
@@ -32,7 +32,7 @@ from calculation import run_period_cumulative_sector_timeseries
 RUN_PERIOD = True
 
 START_DT = datetime.datetime(2005, 5, 20, 0, 0)
-END_DT   = datetime.datetime(2005, 5, 21, 23, 30)
+END_DT   = datetime.datetime(2005, 5, 20, 23, 30)
 
 MODE = "A"  # "A" or "HEIGHT"
 
@@ -69,27 +69,8 @@ def main():
     lats = ds_species['lat'].values #latitudes of the model
     lons = ds_species['lon'].values #longitudes of the model
     print(f"\nSelected station: {name} (lat={lat_s}, lon={lon_s}, alt={alt_s} m)")
-
-    if RUN_PERIOD:
-       df_30min, df_summary = run_period_cumulative_sector_timeseries(
-        base_path=base_path,
-        product=product,
-        species=species,
-        station=station,
-        start_dt=START_DT,
-        end_dt=END_DT,
-        cell_nums=cell_nums,
-        mode=MODE,radii_km=radii_km,
-        step_minutes=30,
-    )
-    # Save
-    out_csv = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_30min_cumsectors.csv"
-    out_sum = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_summary_cumsectors.csv"
-    df_30min.to_csv(out_csv, index=False)
-    df_summary.to_csv(out_sum, index=False)
-
-    print("Saved:", out_csv)
-    print("Saved:", out_sum)
+    
+    
     #------------------------------------------------------------------
     i,j= nearest_grid_index(lat_s,lon_s,lats,lons) #func that calculates the index the station falls into horizontally
     if np.ndim(lats) == 1:
@@ -493,6 +474,21 @@ def main():
     save_figure(fig2, out_dir, f"map_with sectors_{species}_{name}_{time_str}")
     save_figure(fig3,out_dir, f"topo_map_{name}")
     '''
+    
+    if RUN_PERIOD:
+        df_30min, df_summary = run_period_cumulative_sector_timeseries(
+        base_path=base_path,
+        product=product,
+        species=species,
+        station=station,start_dt=START_DT, end_dt=END_DT, cell_nums=cell_nums,
+        radii_km=dist_bins_km, mode=MODE,
+        step_minutes=30, weighted=True
+)
+    # Save
+    out_csv = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_30min_cumsectors.csv"
+    out_sum = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_summary_cumsectors.csv"
+    df_30min.to_csv(out_csv, index=False)
+    df_summary.to_csv(out_sum, index=False)   
 if __name__ == "__main__":
     main()
 

@@ -11,6 +11,40 @@ from vertical_indexing import (
 )
 
 EARTH_RADIUS_KM = 6371.0
+import numpy as np
+
+EARTH_RADIUS_KM = 6371.0  # keep your project value if different
+
+def compute_w_area_small(lats_small, lons_small, earth_radius_km=EARTH_RADIUS_KM):
+    """
+    Area-like weights for a regular lat/lon grid (small box).
+    Returns w_area_small with shape (Ny_s, Nx_s).
+
+    Formula:
+      w ~ R^2 * dlat_rad * dlon_rad * cos(lat)
+
+    Notes:
+      - Uses mean spacing from lats_small/lons_small (robust for regular grids).
+      - If lats_small/lons_small are length < 2, raises ValueError.
+    """
+    lats_small = np.asarray(lats_small)
+    lons_small = np.asarray(lons_small)
+
+    if lats_small.size < 2 or lons_small.size < 2:
+        raise ValueError("Need at least 2 lat and 2 lon points to compute grid spacing.")
+
+    dlat_deg = float(np.mean(np.abs(np.diff(lats_small))))
+    dlon_deg = float(np.mean(np.abs(np.diff(lons_small))))
+
+    dlat_rad = np.deg2rad(dlat_deg)
+    dlon_rad = np.deg2rad(dlon_deg)
+
+    Rm = float(earth_radius_km) * 1000.0
+
+    coslat = np.cos(np.deg2rad(lats_small))  # (Ny_s,)
+    w_area_small = (Rm**2) * dlat_rad * dlon_rad * coslat[:, None] * np.ones((1, len(lons_small)))
+
+    return np.clip(w_area_small, 0.0, None)
 
 
 # -----------------------------
@@ -174,19 +208,41 @@ def run_period_cumulative_sector_timeseries(
     station,
     start_dt, end_dt,
     cell_nums,
-    radii_km,
-    mode="A",          # "A" or "HEIGHT"
+    radii_km,              # e.g. [10,20,30,...] cumulative distance thresholds
+    mode="A",              # "A" or "HEIGHT"
     step_minutes=30,
+    weighted=True        # if True -> sector_stats_weighted
 ):
     """
     Builds a per-30min DataFrame with:
-      - CUM sectors: C1..Ck (cumulative square rings)
-      - BIN distance bins: 0–10, 10–20, ... (non-cumulative bins from add_distance_bins)
+      - CUM sectors: C1..Ck (cumulative square rings around station grid cell)
+      - DISTCUM: D≤10, D≤20, ... (cumulative distance thresholds in km)
+
+    If weighted=True:
+      - uses sector_stats_weighted(...) and expects w_area weights
+      - computes w_area_small ONCE (depends only on lats_small/lons_small)
 
     Returns:
-      df_per_timestep: rows per timestamp x (CUM sectors + BIN bins)
-      df_temporal_summary: temporal aggregates per sector (mean/std/median over time)
+      df_per_timestep: rows per timestamp x (CUM sectors + DISTCUM thresholds)
+      df_temporal_summary: temporal aggregates per (station, mode, sector_type, sector)
     """
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    # ---- assumes these are imported in your module scope ----
+    # iter_timestamps, build_paths, OrogCache
+    # nearest_grid_index, make_small_box_indices
+    # extract_smallbox_ppb_optionA_fixed_k, extract_smallbox_ppb_optionHeight_fixed_z
+    # compute_sector_tables_generic, compute_cumulative_sector_tables
+    # sector_stats_weighted, sector_stats_unweighted
+    # build_distance_dataframe
+    # to_ppb_mmr
+    # EARTH_RADIUS_KM
+
+    #  Compute w
+
+
     lat_s = float(station["Latitude"])
     lon_s = float(station["Longitude"])
     alt_s = float(station["Altitude"])
@@ -218,6 +274,14 @@ def run_period_cumulative_sector_timeseries(
     lons_small = lons[j1_s:j2_s + 1]
     radii = list(range(1, cell_nums + 1))
 
+    # ✅ Compute weights ONCE (small box)
+    w_area_small = compute_w_area_small(lats_small, lons_small, earth_radius_km=EARTH_RADIUS_KM) if weighted else None
+
+    radii_km = np.asarray(radii_km, dtype=float)
+    radii_km = radii_km[np.isfinite(radii_km) & (radii_km > 0)]
+    radii_km = np.unique(radii_km)
+    radii_km.sort()
+
     orog_cache = OrogCache()
     rows = []
 
@@ -230,7 +294,6 @@ def run_period_cumulative_sector_timeseries(
             ds_PL = xr.open_dataset(PLf)
             ds_RH = xr.open_dataset(RHf)
         except FileNotFoundError:
-            # skip missing timestep
             for nm in ("ds_species", "ds_T", "ds_PL", "ds_RH"):
                 obj = locals().get(nm, None)
                 if obj is not None:
@@ -262,18 +325,27 @@ def run_period_cumulative_sector_timeseries(
             z_target = meta_v["z_target_m"]
             k_center = meta_v["k_star_center"]
         else:
+            for ds in (ds_species, ds_T, ds_PL, ds_RH):
+                ds.close()
             raise ValueError("mode must be 'A' or 'HEIGHT'")
+
+        center_ppb = float(grid_ppb[ii, jj])
 
         # --- CUMULATIVE SECTORS (C1..Ck) ---
         sector_dfs, sector_masks = compute_sector_tables_generic(
             ii, jj, lats_small, lons_small, grid_ppb, species, radii=radii
         )
         cum_dfs, _ = compute_cumulative_sector_tables(
-            sector_masks, lats_small, lons_small, grid_ppb, species
+            sector_masks, lats_small, lons_small, grid_ppb, species,
+            #w_area=w_area_small
         )
 
         for k, df_c in enumerate(cum_dfs, start=1):
-            st = sector_stats_unweighted(df_c, species)
+            if weighted:
+                st = sector_stats_weighted(df_c, species, w_col="w_area")  # mean_w,std_w,cv_w,...
+            else:
+                st = sector_stats_unweighted(df_c, species)                # mean,std,cv,...
+
             rows.append({
                 "station": station_name,
                 "date": date,
@@ -285,30 +357,39 @@ def run_period_cumulative_sector_timeseries(
                 "radius": radii[k - 1],
                 "k_star_center": int(k_center),
                 "z_target_m": float(z_target),
+                "center_ppb": center_ppb,
                 **st,
             })
 
-        # --- DISTANCE BINS (0–10, 10–20, ...) ---
+        # --- DISTANCE CUMULATIVE ONLY (D≤10, D≤20, ...) ---
         df_dist = build_distance_dataframe(
-            lats_small, lons_small, grid_ppb, lat_s, lon_s, var_name=species, w_area=None
+            lats_small, lons_small, grid_ppb, lat_s, lon_s,
+            var_name=species,
+            w_area=w_area_small
         )
-        df_dist = add_distance_bins(df_dist, radii_km=radii_km)
 
-        # group by bin_label (non-cumulative bins)
-        for bin_label, df_bin in df_dist.groupby("bin_label", dropna=True):
-            st = sector_stats_unweighted(df_bin, species)
-            dmax = float(df_bin["dmax_km"].iloc[0])  # upper edge for that bin
+        for dmax in radii_km:
+            df_cum = df_dist[df_dist["distance_km"] <= float(dmax)]
+            if df_cum.empty:
+                continue
+
+            if weighted:
+                st = sector_stats_weighted(df_cum, species, w_col="w_area")
+            else:
+                st = sector_stats_unweighted(df_cum, species)
+
             rows.append({
                 "station": station_name,
                 "date": date,
                 "time": time,
                 "timestamp": f"{date} {time}",
                 "mode": mode.upper(),
-                "sector_type": "BIN",
-                "sector": str(bin_label),   # e.g. "10–20"
-                "radius": dmax,
+                "sector_type": "DISTCUM",
+                "sector": f"D≤{int(dmax)}",
+                "radius": float(dmax),
                 "k_star_center": int(k_center),
                 "z_target_m": float(z_target),
+                "center_ppb": center_ppb,
                 **st,
             })
 
@@ -322,7 +403,14 @@ def run_period_cumulative_sector_timeseries(
         return df_per_timestep, df_per_timestep
 
     # --- temporal summary over time for each sector ---
-    stat_cols = [c for c in ["n", "mean", "std", "cv", "median", "iqr", "q25", "q75"] if c in df_per_timestep.columns]
+    # If weighted=True, prefer *_w columns; else use unweighted.
+    if weighted:
+        stat_cols = [c for c in ["n", "mean_w", "std_w", "cv_w", "median_w", "iqr_w", "q1_w", "q3_w"]
+                     if c in df_per_timestep.columns]
+    else:
+        stat_cols = [c for c in ["n", "mean", "std", "cv", "median", "iqr", "q25", "q75"]
+                     if c in df_per_timestep.columns]
+
     summary = (
         df_per_timestep
         .groupby(["station", "mode", "sector_type", "sector"], as_index=False)[stat_cols]
@@ -330,6 +418,9 @@ def run_period_cumulative_sector_timeseries(
     )
     summary.columns = [f"{a}_{b}" if b else a for (a, b) in summary.columns.to_flat_index()]
     df_temporal_summary = summary
+
+    return df_per_timestep, df_temporal_summary
+
 
     return df_per_timestep, df_temporal_summary
 def weighted_quantile(x, w, q):
