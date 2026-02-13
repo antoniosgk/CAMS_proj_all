@@ -447,6 +447,7 @@ def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value")
     ax.axhline(1.0, linestyle="--", linewidth=1)  # reference line at 1
     ax.set_ylabel(ylabel)
     ax.set_xlabel("")
+    ax.set_ylim(0.995,1.002)
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
 
     if title:
@@ -486,7 +487,7 @@ def plot_cum_sector_ratio_timeseries(
     df["datetime"] = _ensure_datetime(df)
     df = df[df["datetime"].notna()].copy()
 
-    df["mean"] = pd.to_numeric(df["mean"], errors="coerce")
+    df["mean"] = pd.to_numeric(df["mean_w"], errors="coerce")
     df["center_ppb"] = pd.to_numeric(df["center_ppb"], errors="coerce")
 
     df = df[np.isfinite(df["mean"]) & np.isfinite(df["center_ppb"]) & (df["center_ppb"] != 0)].copy()
@@ -505,6 +506,7 @@ def plot_cum_sector_ratio_timeseries(
     ax.axhline(1.0, linestyle="--", linewidth=1)
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Time")
+    ax.set_ylim(0.995,1.005)
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     ax.legend(title="Cumulative sector", ncol=2)
     if title:
@@ -524,7 +526,7 @@ def plot_cum_distance_ratio_timeseries(
     Builds cumulative-distance mean ratios from NON-cumulative BIN rows.
 
     Expects BIN rows with:
-      - sector_type == 'DIST_CUM'
+      - sector_type == 'DISTCUM'
       - radius == upper edge of bin (e.g. 10,20,...)
       - mean == mean in that bin
       - n == number of cells in that bin
@@ -540,16 +542,16 @@ def plot_cum_distance_ratio_timeseries(
     if "center_ppb" not in df.columns:
         raise ValueError("Missing 'center_ppb' in df_per_timestep. Add it in the period runner.")
 
-    df = df[df["sector_type"] == "DIST_CUM"].copy()
+    df = df[df["sector_type"] == "DISTCUM"].copy()
     if df.empty:
-        raise ValueError("No 'DIST_CUM' rows found in df_per_timestep.")
+        raise ValueError("No 'DISTCUM' rows found in df_per_timestep.")
 
     df["datetime"] = _ensure_datetime(df)
     df = df[df["datetime"].notna()].copy()
 
     # numeric
     df["radius"] = pd.to_numeric(df["radius"], errors="coerce")
-    df["mean"] = pd.to_numeric(df["mean"], errors="coerce")
+    df["mean"] = pd.to_numeric(df["mean_w"], errors="coerce")
     df["n"] = pd.to_numeric(df["n"], errors="coerce")
     df["center_ppb"] = pd.to_numeric(df["center_ppb"], errors="coerce")
 
@@ -568,19 +570,15 @@ def plot_cum_distance_ratio_timeseries(
     for ts, g in df.groupby("datetime"):
         g = g.sort_values("radius")
 
-        # cumulative sums (weighted by n)
-        wsum = np.cumsum(g["mean"].values * g["n"].values)
-        nsum = np.cumsum(g["n"].values)
-        cum_mean = wsum / nsum
-
         center_val = float(g["center_ppb"].iloc[0])
 
-        for dmax, cm in zip(g["radius"].values, cum_mean):
+        for dmax, mean_val in zip(g["radius"].values, g["mean"].values):
             out_rows.append({
-                "datetime": ts,
-                "label": f"D≤{int(dmax)}km",
-                "ratio": float(cm) / center_val,
-            })
+            "datetime": ts,
+            "label": f"D≤{int(dmax)}km",
+            "ratio": float(mean_val) / center_val,
+        })
+
 
     df_line = pd.DataFrame(out_rows)
     if df_line.empty:

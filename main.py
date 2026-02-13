@@ -31,21 +31,21 @@ from calculation import run_period_cumulative_sector_timeseries
 # -----------------------
 RUN_PERIOD = True
 
-START_DT = datetime.datetime(2005, 5, 20, 0, 0)
-END_DT   = datetime.datetime(2005, 5, 20, 1, 00)
+START_DT = datetime.datetime(2005, 5, 20, 0, 00)
+END_DT   = datetime.datetime(2005, 5, 20, 3, 00)
 
 MODE = "A"  # "A" or "HEIGHT"
 
 idx = 5
-cell_nums = 14
-dist_bins_km = [10,20,30,40,50,60,70,80,90,100]  # used as bin edges
+cell_nums = 6
+dist_bins_km = [10,20,30,40]  # used as bin edges
 out_dir = "/home/agkiokas/CAMS/plots/"
 #%%
 def main():
     ###########################################
     
     name=None #name of the station,can be put to None
-    cell_nums = 14 #numb of cells that will get plotted n**2;determines also radii,number of sectors
+    #cell_nums = 14 #numb of cells that will get plotted n**2;determines also radii,number of sectors
     d_zoom_species=1 #zoom of plots
     d_zoom_topo=20.0  #zoom of topo in fig3
     zoom_map= 45.0   #extent of map in fig4
@@ -474,7 +474,7 @@ def main():
     save_figure(fig2, out_dir, f"map_with sectors_{species}_{name}_{time_str}")
     save_figure(fig3,out_dir, f"topo_map_{name}")
     '''
-    
+    print(df_dist[:50])
     if RUN_PERIOD:
         df_30min, df_summary = run_period_cumulative_sector_timeseries(
         base_path=base_path,
@@ -482,7 +482,7 @@ def main():
         species=species,
         station=station,start_dt=START_DT, end_dt=END_DT, cell_nums=cell_nums,
         radii_km=dist_bins_km, mode=MODE,
-        step_minutes=30, weighted=False
+        step_minutes=30, weighted=True
 )
         # Cumulative sector ratio lines
         fig1, ax1 = plot_cum_sector_ratio_timeseries(
@@ -490,7 +490,9 @@ def main():
         title=f"{species}: CUM sector mean / center ({station['Station_Name']})"
     )
         fig1.savefig(f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_ts_ratio_CUM.png", dpi=200)
-        print(df_30min)
+        print(df_30min[(df_30min["sector_type"]=="DISTCUM") &
+         (df_30min["timestamp"]=="20050520 0200")
+        ][["sector","radius","n","mean_w","cv_w","center_ppb"]])
         
     
     # Cumulative distance ratio lines
