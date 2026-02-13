@@ -453,3 +453,164 @@ def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value")
         ax.set_title(title)
 
     return fig, ax
+
+
+
+def _ensure_datetime(df, date_col="date", time_col="time"):
+    return pd.to_datetime(
+        df[date_col].astype(str) + df[time_col].astype(str),
+        format="%Y%m%d%H%M",
+        errors="coerce",
+    )
+
+
+def plot_cum_sector_ratio_timeseries(
+    df_per_timestep,
+    ax=None,
+    title=None,
+    ylabel="Cumulative sector mean / center",
+):
+    """
+    Uses rows where sector_type == 'CUM'.
+    Expects columns: date, time, sector, mean, center_ppb.
+    Produces one line per cumulative sector (C1, C2, ...).
+    """
+    df = df_per_timestep.copy()
+    if "center_ppb" not in df.columns:
+        raise ValueError("Missing 'center_ppb' in df_per_timestep. Add it in the period runner.")
+
+    df = df[df["sector_type"] == "CUM"].copy()
+    if df.empty:
+        raise ValueError("No 'CUM' rows found in df_per_timestep.")
+
+    df["datetime"] = _ensure_datetime(df)
+    df = df[df["datetime"].notna()].copy()
+
+    df["mean"] = pd.to_numeric(df["mean"], errors="coerce")
+    df["center_ppb"] = pd.to_numeric(df["center_ppb"], errors="coerce")
+
+    df = df[np.isfinite(df["mean"]) & np.isfinite(df["center_ppb"]) & (df["center_ppb"] != 0)].copy()
+    df["ratio"] = df["mean"] / df["center_ppb"]
+
+    wide = df.pivot_table(index="datetime", columns="sector", values="ratio", aggfunc="mean").sort_index()
+
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    for col in wide.columns:
+        ax.plot(wide.index, wide[col].values, label=str(col))
+
+    ax.axhline(1.0, linestyle="--", linewidth=1)
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel("Time")
+    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
+    ax.legend(title="Cumulative sector", ncol=2)
+    if title:
+        ax.set_title(title)
+
+    return fig, ax
+
+
+def plot_cum_distance_ratio_timeseries(
+    df_per_timestep,
+    dist_bins_km,
+    ax=None,
+    title=None,
+    ylabel="Cumulative distance mean / center",
+):
+    """
+    Builds cumulative-distance mean ratios from NON-cumulative BIN rows.
+
+    Expects BIN rows with:
+      - sector_type == 'DIST_CUM'
+      - radius == upper edge of bin (e.g. 10,20,...)
+      - mean == mean in that bin
+      - n == number of cells in that bin
+      - center_ppb == denominator for that timestamp
+
+    Computes for each timestamp and each threshold D<=dmax:
+      cum_mean(dmax) = sum_{bins<=dmax}(mean_bin * n_bin) / sum_{bins<=dmax}(n_bin)
+      ratio(dmax) = cum_mean(dmax) / center_ppb
+    Produces one line per D<=dmax.
+    """
+    df = df_per_timestep.copy()
+    print(df)
+    if "center_ppb" not in df.columns:
+        raise ValueError("Missing 'center_ppb' in df_per_timestep. Add it in the period runner.")
+
+    df = df[df["sector_type"] == "DIST_CUM"].copy()
+    if df.empty:
+        raise ValueError("No 'DIST_CUM' rows found in df_per_timestep.")
+
+    df["datetime"] = _ensure_datetime(df)
+    df = df[df["datetime"].notna()].copy()
+
+    # numeric
+    df["radius"] = pd.to_numeric(df["radius"], errors="coerce")
+    df["mean"] = pd.to_numeric(df["mean"], errors="coerce")
+    df["n"] = pd.to_numeric(df["n"], errors="coerce")
+    df["center_ppb"] = pd.to_numeric(df["center_ppb"], errors="coerce")
+
+    df = df[
+        np.isfinite(df["radius"]) &
+        np.isfinite(df["mean"]) &
+        np.isfinite(df["n"]) & (df["n"] > 0) &
+        np.isfinite(df["center_ppb"]) & (df["center_ppb"] != 0)
+    ].copy()
+
+    # keep only bins that match your radii_km edges
+    dist_bins_km = np.asarray(dist_bins_km, dtype=float)
+    df = df[df["radius"].isin(dist_bins_km)].copy()
+
+    out_rows = []
+    for ts, g in df.groupby("datetime"):
+        g = g.sort_values("radius")
+
+        # cumulative sums (weighted by n)
+        wsum = np.cumsum(g["mean"].values * g["n"].values)
+        nsum = np.cumsum(g["n"].values)
+        cum_mean = wsum / nsum
+
+        center_val = float(g["center_ppb"].iloc[0])
+
+        for dmax, cm in zip(g["radius"].values, cum_mean):
+            out_rows.append({
+                "datetime": ts,
+                "label": f"D≤{int(dmax)}km",
+                "ratio": float(cm) / center_val,
+            })
+
+    df_line = pd.DataFrame(out_rows)
+    if df_line.empty:
+        raise ValueError("No cumulative distance ratios computed (check bins and data).")
+
+    wide = df_line.pivot_table(index="datetime", columns="label", values="ratio", aggfunc="mean").sort_index()
+
+    # order columns by increasing dmax
+    def _dmax(s):
+        try:
+            return float(s.replace("D≤", "").replace("km", ""))
+        except Exception:
+            return np.inf
+
+    wide = wide.reindex(sorted(wide.columns, key=_dmax), axis=1)
+
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    for col in wide.columns:
+        ax.plot(wide.index, wide[col].values, label=str(col))
+
+    ax.axhline(1.0, linestyle="--", linewidth=1)
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel("Time")
+    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
+    ax.legend(title="Cumulative distance", ncol=2)
+    if title:
+        ax.set_title(title)
+
+    return fig, ax

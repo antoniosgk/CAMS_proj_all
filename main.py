@@ -17,7 +17,7 @@ from vertical_indexing import metpy_find_level_index,metpy_compute_heights
 from stations_utils import load_stations, select_station #, all_stations, map_stations_to_model_levels
 from horizontal_indexing import nearest_grid_index
 from file_utils import T_file,RH_file,pl_file,orog_file,stations_path,species_file,species
-from plots import plot_variable_on_map,plot_rectangles,save_figure,plot_cv_vs_distance,plot_cv_bars_distance_both,plot_ratio_bars
+from plots import plot_variable_on_map,plot_rectangles,save_figure,plot_cv_vs_distance,plot_cv_bars_distance_both,plot_ratio_bars,plot_cum_sector_ratio_timeseries,plot_cum_distance_ratio_timeseries
 from calculation import (compute_cumulative_sector_tables,compute_ring_sector_masks,sector_stats_weighted,weighted_quantile,
                          sector_stats_unweighted,compute_sector_tables_generic
                          ,add_distance_bins,build_distance_dataframe,stats_by_distance_bins,weighted_quantile,compute_w_area_small,
@@ -32,7 +32,7 @@ from calculation import run_period_cumulative_sector_timeseries
 RUN_PERIOD = True
 
 START_DT = datetime.datetime(2005, 5, 20, 0, 0)
-END_DT   = datetime.datetime(2005, 5, 20, 23, 30)
+END_DT   = datetime.datetime(2005, 5, 20, 1, 00)
 
 MODE = "A"  # "A" or "HEIGHT"
 
@@ -482,13 +482,33 @@ def main():
         species=species,
         station=station,start_dt=START_DT, end_dt=END_DT, cell_nums=cell_nums,
         radii_km=dist_bins_km, mode=MODE,
-        step_minutes=30, weighted=True
+        step_minutes=30, weighted=False
 )
+        # Cumulative sector ratio lines
+        fig1, ax1 = plot_cum_sector_ratio_timeseries(
+        df_30min,
+        title=f"{species}: CUM sector mean / center ({station['Station_Name']})"
+    )
+        fig1.savefig(f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_ts_ratio_CUM.png", dpi=200)
+        print(df_30min)
+        
+    
+    # Cumulative distance ratio lines
+        fig2, ax2 = plot_cum_distance_ratio_timeseries(
+        df_30min,
+        dist_bins_km=dist_bins_km,
+        title=f"{species}: CUM distance mean / center ({station['Station_Name']})"
+    )
+        fig2.savefig(f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_ts_ratio_DISTCUM.png", dpi=200)
+
+        plt.show()
+        raise SystemExit
     # Save
     out_csv = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_30min_cumsectors.csv"
     out_sum = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_summary_cumsectors.csv"
     df_30min.to_csv(out_csv, index=False)
-    df_summary.to_csv(out_sum, index=False)   
+    df_summary.to_csv(out_sum, index=False)  
+    
 if __name__ == "__main__":
     main()
 
