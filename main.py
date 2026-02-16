@@ -34,10 +34,10 @@ RUN_PERIOD = True
 START_DT = datetime.datetime(2005, 5, 20, 0, 00)
 END_DT   = datetime.datetime(2005, 5, 20, 3, 00)
 
-MODE = "A"  # "A" or "HEIGHT"
+MODE = "HEIGHT"  # "A" or "HEIGHT" A for same vertical level everywhere ; HEIGHT for the same height everywhere
 
-idx = 5
-cell_nums = 6
+idx = 5  #index of the stationss 
+cell_nums = 6  #
 dist_bins_km = [10,20,30,40]  # used as bin edges
 out_dir = "/home/agkiokas/CAMS/plots/"
 #%%
@@ -296,12 +296,12 @@ def main():
     print('df_cv_w')
     print(df_cv_w)
     fig_cv, ax_cv = plot_cv_vs_distance(df_cv_unw, df_cv_w,
-    title=f"{species} CV vs distance ({name})")
+    title=f"{species} CV vs distance ({name}) at {time_str}")
     
     plt.show()
     fig, ax = plot_cv_bars_distance_both(
     df_cv_unw, df_cv_w,
-    title=f"{species} CV vs distance ({name})",
+    title=f"{species} CV vs distance ({name} at {time_str})",
     reverse=False  
 )
     plt.show()
@@ -317,7 +317,7 @@ def main():
 
     fig_r1, ax_r1 = plot_ratio_bars(
     df_ratio_cum,
-    title=f"{species}: cumulative sector mean / center"
+    title=f"{species} {time_str}: cumulative sector mean / center"
 )
     plt.show()
     df_ratio_dist = distance_cumulative_mean_ratio_to_center(
@@ -330,7 +330,7 @@ def main():
 
     fig_r2, ax_r2 = plot_ratio_bars(
     df_ratio_dist,
-    title=f"{species}: cumulative distance mean / center"
+    title=f"{species} {time_str}: cumulative distance mean / center"
 )
     plt.show()
     #---------------------------------------------------
@@ -474,7 +474,7 @@ def main():
     save_figure(fig2, out_dir, f"map_with sectors_{species}_{name}_{time_str}")
     save_figure(fig3,out_dir, f"topo_map_{name}")
     '''
-    print(df_dist[:50])
+    print(df_dist[:20])
     if RUN_PERIOD:
         df_30min, df_summary = run_period_cumulative_sector_timeseries(
         base_path=base_path,
@@ -487,7 +487,7 @@ def main():
         # Cumulative sector ratio lines
         fig1, ax1 = plot_cum_sector_ratio_timeseries(
         df_30min,
-        title=f"{species}: CUM sector mean / center ({station['Station_Name']})"
+        title=f"{species}: CUM sector mean / center ({station['Station_Name']} {MODE})"
     )
         fig1.savefig(f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_ts_ratio_CUM.png", dpi=200)
         print(df_30min[(df_30min["sector_type"]=="DISTCUM") &
@@ -499,7 +499,7 @@ def main():
         fig2, ax2 = plot_cum_distance_ratio_timeseries(
         df_30min,
         dist_bins_km=dist_bins_km,
-        title=f"{species}: CUM distance mean / center ({station['Station_Name']})"
+        title=f"{species}: CUM distance mean / center ({station['Station_Name']} {MODE})"
     )
         fig2.savefig(f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_ts_ratio_DISTCUM.png", dpi=200)
 
