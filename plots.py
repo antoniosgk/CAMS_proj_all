@@ -434,7 +434,7 @@ def plot_cv_bars_distance_both(df_cv_unw, df_cv_w, ax=None, title=None, reverse=
 
     fig.tight_layout()
     return fig, ax
-def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value"):
+def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value",xlabel='Distance'):
     """
     df_ratio: DataFrame with columns ["label", "ratio"]
     """
@@ -446,8 +446,8 @@ def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value")
     ax.bar(df_ratio["label"], df_ratio["ratio"])
     ax.axhline(1.0, linestyle="--", linewidth=1)  # reference line at 1
     ax.set_ylabel(ylabel)
-    ax.set_xlabel("")
-    ax.set_ylim(0.995,1.002)
+    ax.set_xlabel(xlabel)
+    ax.set_ylim(0.95,1.05)
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
 
     if title:

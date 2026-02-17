@@ -29,16 +29,16 @@ from calculation import run_period_cumulative_sector_timeseries
 # -----------------------
 # USER SETTINGS
 # -----------------------
-RUN_PERIOD = True
+RUN_PERIOD = False
 
 START_DT = datetime.datetime(2005, 5, 20, 0, 00)
 END_DT   = datetime.datetime(2005, 5, 20, 3, 00)
 
 MODE = "HEIGHT"  # "A" or "HEIGHT" A for same vertical level everywhere ; HEIGHT for the same height everywhere
-
+                 #only for RUN_PERIOD=True
 idx = 5  #index of the stationss 
-cell_nums = 6  #
-dist_bins_km = [10,20,30,40]  # used as bin edges
+cell_nums = 14  #
+dist_bins_km = [10,20,30,40,50,60,70,80,90,100]  # used as bin edges
 out_dir = "/home/agkiokas/CAMS/plots/"
 #%%
 def main():
@@ -74,13 +74,13 @@ def main():
     #------------------------------------------------------------------
     i,j= nearest_grid_index(lat_s,lon_s,lats,lons) #func that calculates the index the station falls into horizontally
     if np.ndim(lats) == 1:
-        Ny = lats.shape[0]
-        Nx = lons.shape[0]
+        Ny = lats.shape[0]   #shape of lats(model)
+        Nx = lons.shape[0]   #shape of lons(model)
     else:
         Ny, Nx = lats.shape
     
     # --- SMALL box (species) ---
-    i1_s, i2_s = max(0, i - cell_nums), min(Ny - 1, i + cell_nums)
+    i1_s, i2_s = max(0, i - cell_nums), min(Ny - 1, i + cell_nums)  
     j1_s, j2_s = max(0, j - cell_nums), min(Nx - 1, j + cell_nums)
 
     print(f"\nLoading domain subset: i={i1_s}:{i2_s}, j={j1_s}:{j2_s} for plotting")
@@ -88,8 +88,8 @@ def main():
     lats_small = lats[i1_s:i2_s + 1]
     lons_small = lons[j1_s:j2_s + 1]
 
-    ii = i - i1_s
-    jj = j - j1_s
+    ii = i - i1_s     #index of latitude of central grid cell referred to the small box
+    jj = j - j1_s     #index of longitude of central grid cell referred to the small box
     ds_big = ds_species #a copy of ds_species,maybe not needed,to reevalutate
 
     # Coordinates
@@ -103,33 +103,34 @@ def main():
     PHIS_field = ds_orog["PHIS"] #surface geopotential height
     SGH_field = ds_orog["SGH"]  #isotropic stdv of GWD topography
     # Take PHIS / SGH at the same i, j as the station grid cell
-    PHIS_val = PHIS_field.isel(lat=i, lon=j).item() #Surf Geopotential height of the gridcell
-    SGH_val = SGH_field.isel(lat=i, lon=j).item()  #isotropic stdv of GWD of the gridcell
-    z_surf_model = (PHIS_val * mp_units('m^2/s^2') / g).to('meter').magnitude #from geopotential to geop.height
+    PHIS_val = PHIS_field.isel(lat=i, lon=j).item() #Surf Geopotential height of the central gridcell
+    SGH_val = SGH_field.isel(lat=i, lon=j).item()  #isotropic stdv of GWD of the central gridcell
+    z_surf_model = (PHIS_val * mp_units('m^2/s^2') / g).to('meter').magnitude #from geopotential to geop.height z=phi/g
     print(f"Model surface height at station grid cell: {z_surf_model:.1f} m")
     # Extract local profiles
-    T_prof = ds_T["T"].values[0, :, i, j] #T profile for the specific gridcell
-    p_prof = ds_PL["PL"].values[0, :, i, j]  # Pressure profile for the specific gridcell
-    species_prof= ds_species[species].values[0,:,i,j] #here i must put species or var!!!
-    RH_prof = ds_RH['RH'].values[0,:,i,j]
+    T_prof = ds_T["T"].values[0, :, i, j] #T profile for the specific central gridcell
+    p_prof = ds_PL["PL"].values[0, :, i, j]  # Pressure profile for the specific central gridcell
+    species_prof= ds_species[species].values[0,:,i,j] #species profile for the central gridcell
+    RH_prof = ds_RH['RH'].values[0,:,i,j]    #RH profile for the central gridcell
     # PHIS_small aligned to ds_small domain
     # --- LARGE box (terrain background) ---
-    dlat = float(np.abs(lats[1] - lats[0]))
-    dlon = float(np.abs(lons[1] - lons[0]))
+    dlat = float(np.abs(lats[1] - lats[0]))    #it should be 0.0625
+    dlon = float(np.abs(lons[1] - lons[0]))    #it should be 0.0625
 
-    cell_nums_lat = int(np.ceil(d_zoom_topo / dlat))
-    cell_nums_lon = int(np.ceil(d_zoom_topo / dlon))
+    cell_nums_lat = int(np.ceil(d_zoom_topo / dlat)) #here i calculate the number of cells used for topography
+    cell_nums_lon = int(np.ceil(d_zoom_topo / dlon)) #based on the d_zoom_topo
     cell_nums_bg = max(cell_nums_lat, cell_nums_lon)
 
-    i1_bg, i2_bg = max(0, i - cell_nums_bg), min(Ny - 1, i + cell_nums_bg)
-    j1_bg, j2_bg = max(0, j - cell_nums_bg), min(Nx - 1, j + cell_nums_bg)
+    i1_bg, i2_bg = max(0, i - cell_nums_bg), min(Ny - 1, i + cell_nums_bg)  #indexing of the big box(phi(topography)) lats
+    j1_bg, j2_bg = max(0, j - cell_nums_bg), min(Nx - 1, j + cell_nums_bg)  #lons
 
     PHIS_bg = ds_orog["PHIS"].isel(time=0, lat=slice(i1_bg, i2_bg + 1), lon=slice(j1_bg, j2_bg + 1)).values 
+    #value of phi_surface for all the grid cells as calculated by cell_nums_bg
     #maybe i will need also a PHIS_small when i will want the vertical level to change
-    z_orog_bg = PHIS_bg / 9.80665
+    z_orog_bg = PHIS_bg / 9.80665  #model height for all the grid cells
 
-    lats_bg = lats[i1_bg:i2_bg + 1]
-    lons_bg = lons[j1_bg:j2_bg + 1]
+    lats_bg = lats[i1_bg:i2_bg + 1]  #lats of the big(topo) box
+    lons_bg = lons[j1_bg:j2_bg + 1]  #lons of the big (topo) box
 
     #-----------------------------------------
     #  MetPy-based vertical level selection --- metpy_find_level_index
@@ -188,6 +189,7 @@ def main():
     #------------------------------------------------------
     sector_dfs, sector_masks = compute_sector_tables_generic(
     ii, jj, lats_small, lons_small, data_arr_ppb, species, radii=radii)
+    #sector_dfs:df for each cell the lat_idx,lon_idx,lat,lon,species
     '''
     sector_names = [f"S{k+1}" for k in range(len(sector_dfs))]
     
@@ -206,6 +208,7 @@ def main():
     data_arr_ppb,
     species
 )
+    
     def add_area_weights(df, lat_col="lat", w_col="w_area"):
      lat_rad = np.deg2rad(pd.to_numeric(df[lat_col], errors="coerce").to_numpy(dtype=float))
      w = np.cos(lat_rad)
@@ -238,13 +241,15 @@ def main():
         f"mean_w={sw['mean_w']:.3f}, std_w={sw['std_w']:.3f}, cv_w={sw['cv_w']:.3f}, "
         f"med_w={sw['median_w']:.3f}, IQR_w={sw['iqr_w']:.3f}"
     )
+     '''
+     #we are not interested in ring stats.we want only cumulative stats
     ring_stats_unw = []
     ring_stats_w   = []
 
     for df in sector_dfs:
      ring_stats_unw.append(sector_stats_unweighted(df, species))
      ring_stats_w.append(sector_stats_weighted(df, species, w_col="w_area"))
-
+    '''
     cum_stats_unw = []
     cum_stats_w   = []
 
@@ -266,7 +271,7 @@ def main():
     species,
     w_area=w_area,
 )
-
+    
     df_cv_unw = stats_by_distance_bins(
     df_dist, species, dist_bins_km
 )
@@ -275,26 +280,12 @@ def main():
     df_dist, species, dist_bins_km, w_col="w_area"
 )
 
-    # Build distance dataframe
-    df_dist = build_distance_dataframe(
-    lats_small, lons_small, data_arr_ppb,
-    lat_s, lon_s,
-    var_name=species,
-    w_area=w_area,   # cos(lat) grid, same shape as data_arr
-)
+    
 
 # Define distance bins (km)
 
 # Add bins (USED BY BOTH CV + BOXPLOTS)
     df_dist = add_distance_bins(df_dist, radii_km)
-    print('df_dist')
-    print(df_dist[:50])
-    print('-----------------')
-    print('df_cv_unweighted')
-    print(df_cv_unw)
-    print('----------------')
-    print('df_cv_w')
-    print(df_cv_w)
     fig_cv, ax_cv = plot_cv_vs_distance(df_cv_unw, df_cv_w,
     title=f"{species} CV vs distance ({name}) at {time_str}")
     
@@ -312,14 +303,17 @@ def main():
     var_name=species,
     center_value=center_value,
     labels=[f"C{k}" for k in range(1, len(cum_dfs)+1)],
-    w_col=None,           # or "w_area" if you want weighted
+    w_col='w_area',           # or "w_area" if you want weighted
 )
-
+    print('df_ratio_cum')
+    print(df_ratio_cum)
     fig_r1, ax_r1 = plot_ratio_bars(
-    df_ratio_cum,
-    title=f"{species} {time_str}: cumulative sector mean / center"
+    df_ratio_cum,xlabel='Sectors',
+    title=f"{species} {time_str}: Cumulative sector mean / center"
+
 )
     plt.show()
+
     df_ratio_dist = distance_cumulative_mean_ratio_to_center(
     df_dist=df_dist,
     var_name=species,
@@ -329,10 +323,13 @@ def main():
 )
 
     fig_r2, ax_r2 = plot_ratio_bars(
-    df_ratio_dist,
-    title=f"{species} {time_str}: cumulative distance mean / center"
+    df_ratio_dist,xlabel='Distance < km',
+    title=f"{species} {time_str}: Cumulative distance mean / center"
 )
     plt.show()
+    print('df_ratio_dist')
+    print(df_ratio_dist)
+
     #---------------------------------------------------
     '''
     fig1, ax1, im1 = plot_variable_on_map(
@@ -474,7 +471,7 @@ def main():
     save_figure(fig2, out_dir, f"map_with sectors_{species}_{name}_{time_str}")
     save_figure(fig3,out_dir, f"topo_map_{name}")
     '''
-    print(df_dist[:20])
+    
     if RUN_PERIOD:
         df_30min, df_summary = run_period_cumulative_sector_timeseries(
         base_path=base_path,
@@ -506,11 +503,12 @@ def main():
         plt.show()
         raise SystemExit
     # Save
+    '''
     out_csv = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_30min_cumsectors.csv"
     out_sum = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_summary_cumsectors.csv"
     df_30min.to_csv(out_csv, index=False)
     df_summary.to_csv(out_sum, index=False)  
-    
+    '''
 if __name__ == "__main__":
     main()
 

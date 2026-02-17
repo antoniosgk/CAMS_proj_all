@@ -524,6 +524,6 @@ def distance_cumulative_mean_ratio_to_center(df_dist, var_name, center_value, d_
             mean_val = (np.sum(w * vals) / np.sum(w)) if vals.size else np.nan
 
         ratio = mean_val / center_value if (np.isfinite(mean_val) and center_value != 0) else np.nan
-        rows.append({"label": f"D≤{dmax}", "ratio": float(ratio) if np.isfinite(ratio) else np.nan})
+        rows.append({"label": f" {dmax}", "ratio": float(ratio) if np.isfinite(ratio) else np.nan})
 
     return pd.DataFrame(rows)
