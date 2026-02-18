@@ -25,16 +25,17 @@ from calculation import (compute_cumulative_sector_tables,compute_ring_sector_ma
 from file_utils import base_path, product, species, stations_path
 from stations_utils import load_stations, select_station
 from calculation import run_period_cumulative_sector_timeseries
+from io_netcdf import df30min_to_netcdf_station_species
 
 # -----------------------
 # USER SETTINGS
 # -----------------------
-RUN_PERIOD = False
+RUN_PERIOD = True
 
 START_DT = datetime.datetime(2005, 5, 20, 0, 00)
 END_DT   = datetime.datetime(2005, 5, 20, 3, 00)
 
-MODE = "HEIGHT"  # "A" or "HEIGHT" A for same vertical level everywhere ; HEIGHT for the same height everywhere
+MODE = "A"  # "A" or "HEIGHT" A for same vertical level everywhere ; HEIGHT for the same height everywhere
                  #only for RUN_PERIOD=True
 idx = 5  #index of the stationss 
 cell_nums = 14  #
@@ -319,7 +320,7 @@ def main():
     var_name=species,
     center_value=center_value,
     d_bins_km=dist_bins_km,
-    w_col=None,           # or "w_area"
+    w_col='w_area',           # or "w_area"
 )
 
     fig_r2, ax_r2 = plot_ratio_bars(
@@ -473,6 +474,9 @@ def main():
     '''
     
     if RUN_PERIOD:
+        i, j = nearest_grid_index(float(station["Latitude"]), float(station["Longitude"]), lats, lons)
+        model_lat = float(lats[i]) if np.ndim(lats) == 1 else float(lats[i, j])
+        model_lon = float(lons[j]) if np.ndim(lons) == 1 else float(lons[i, j])
         df_30min, df_summary = run_period_cumulative_sector_timeseries(
         base_path=base_path,
         product=product,
@@ -487,9 +491,7 @@ def main():
         title=f"{species}: CUM sector mean / center ({station['Station_Name']} {MODE})"
     )
         fig1.savefig(f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_ts_ratio_CUM.png", dpi=200)
-        print(df_30min[(df_30min["sector_type"]=="DISTCUM") &
-         (df_30min["timestamp"]=="20050520 0200")
-        ][["sector","radius","n","mean_w","cv_w","center_ppb"]])
+        
         
     
     # Cumulative distance ratio lines
@@ -501,14 +503,24 @@ def main():
         fig2.savefig(f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_ts_ratio_DISTCUM.png", dpi=200)
 
         plt.show()
-        raise SystemExit
+        #raise SystemExit
+
     # Save
-    '''
-    out_csv = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_30min_cumsectors.csv"
-    out_sum = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_summary_cumsectors.csv"
-    df_30min.to_csv(out_csv, index=False)
-    df_summary.to_csv(out_sum, index=False)  
-    '''
+    
+        out_csv = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_30min_cumsectors.csv"
+        out_sum = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_summary_cumsectors.csv"
+        out_nc = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}.nc"
+
+        ds_out = df30min_to_netcdf_station_species(
+            df_30min=df_30min,station_dict=station,model_lat=model_lat,
+          model_lon=model_lon,species=species, out_nc_path=out_nc,mode=MODE,          # "A" or "HEIGHT"
+           weighted=True,     # uses mean_w/std_w/cv_w
+               )
+        print("Wrote:", out_nc)
+        df_30min.to_csv(out_csv, index=False)
+        df_summary.to_csv(out_sum, index=False) 
+        raise SystemExit 
+    
 if __name__ == "__main__":
     main()
 
