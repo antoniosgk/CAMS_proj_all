@@ -17,7 +17,8 @@ from vertical_indexing import metpy_find_level_index,metpy_compute_heights
 from stations_utils import load_stations, select_station #, all_stations, map_stations_to_model_levels
 from horizontal_indexing import nearest_grid_index
 from file_utils import T_file,RH_file,pl_file,orog_file,stations_path,species_file,species
-from plots import plot_variable_on_map,plot_rectangles,save_figure,plot_cv_vs_distance,plot_cv_bars_distance_both,plot_ratio_bars,plot_cum_sector_ratio_timeseries,plot_cum_distance_ratio_timeseries
+from plots import plot_variable_on_map,plot_rectangles,save_figure,plot_cv_vs_distance,plot_cv_bars_distance_both,plot_ratio_bars,plot_cv_bars_sector_both
+from plots import plot_cum_sector_ratio_timeseries,plot_cum_distance_ratio_timeseries,plot_profile_species_Z,plot_profile_T_Z,plot_profile_P_T,plot_cv_cumulative_sectors
 from calculation import (compute_cumulative_sector_tables,compute_ring_sector_masks,sector_stats_weighted,weighted_quantile,
                          sector_stats_unweighted,compute_sector_tables_generic
                          ,add_distance_bins,build_distance_dataframe,stats_by_distance_bins,weighted_quantile,compute_w_area_small,
@@ -30,15 +31,15 @@ from io_netcdf import df30min_to_netcdf_station_species
 # -----------------------
 # USER SETTINGS
 # -----------------------
-RUN_PERIOD = True
+RUN_PERIOD = False
 
-START_DT = datetime.datetime(2005, 5, 20, 0, 00)
+START_DT = datetime.datetime(2005, 5, 20, 2, 30)
 END_DT   = datetime.datetime(2005, 5, 20, 3, 00)
 
 MODE = "A"  # "A" or "HEIGHT" A for same vertical level everywhere ; HEIGHT for the same height everywhere
                  #only for RUN_PERIOD=True
 idx = 5  #index of the stationss 
-cell_nums = 14  #
+cell_nums = 20  #
 dist_bins_km = [10,20,30,40,50,60,70,80,90,100]  # used as bin edges
 out_dir = "/home/agkiokas/CAMS/plots/"
 #%%
@@ -47,7 +48,7 @@ def main():
     
     name=None #name of the station,can be put to None
     #cell_nums = 14 #numb of cells that will get plotted n**2;determines also radii,number of sectors
-    d_zoom_species=1 #zoom of plots
+    d_zoom_species=0.3 #zoom of plots
     d_zoom_topo=20.0  #zoom of topo in fig3
     zoom_map= 45.0   #extent of map in fig4
     radii = list(range(1, cell_nums+1)) #(range(1,cell_nums+1)) #number of sectors
@@ -281,7 +282,15 @@ def main():
     df_dist, species, dist_bins_km, w_col="w_area"
 )
 
-    
+    fig_cv_cum, ax_cv_cum = plot_cv_cumulative_sectors(
+    cum_stats_unw,
+    cum_stats_w,
+    title=f"{species} CV — cumulative sectors at {time_str}")
+
+    fig_cv_cum_b,ax_cv_cum_b=plot_cv_bars_sector_both(
+    cum_stats_unw,
+    cum_stats_w,
+    title=f"{species} CV — cumulative sectors at {time_str}")
 
 # Define distance bins (km)
 
@@ -303,8 +312,8 @@ def main():
     cum_dfs=cum_dfs,
     var_name=species,
     center_value=center_value,
-    labels=[f"C{k}" for k in range(1, len(cum_dfs)+1)],
-    w_col='w_area',           # or "w_area" if you want weighted
+    labels=[f"{k}" for k in range(1, len(cum_dfs)+1)],
+    w_col='w_area',           # or "w_area",'None' if you want weighted
 )
     print('df_ratio_cum')
     print(df_ratio_cum)
@@ -458,16 +467,14 @@ def main():
     ax4.legend(loc="upper right")
     ax4.set_title(f"Stations in China", pad=18)
     plt.show()
-    
+    #pressure with T
+    #fig_PT, ax_PT=plot_profile_P_T(p_prof, T_prof, idx_level, time_str=time_str,meta=meta)
     #temperature with height
-    fig_TZ, ax_TZ = plot_profile_T_Z(T_prof, z_prof, idx_level,
-                                 time_str=time_str, z_units="km",meta=meta)
+    fig_TZ, ax_TZ = plot_profile_T_Z(T_prof, z_prof, idx_level, time_str=time_str, z_units="km",meta=meta)
     # species–Z
-    fig_SZ, ax_SZ = plot_profile_species_Z(
-    z_prof,species_prof_ppb,idx_level,
-    species_name=species,species_units=units_ppb,time_str=time_str,z_units="km",meta=meta)
-
-
+    fig_SZ, ax_SZ = plot_profile_species_Z(z_prof,species_prof_ppb,idx_level,species_name=species,species_units=units_ppb,time_str=time_str,z_units="km",meta=meta)
+'''
+    '''
     save_figure(fig1, out_dir, f"map_{species}_{name}_{time_str}")
     save_figure(fig2, out_dir, f"map_with sectors_{species}_{name}_{time_str}")
     save_figure(fig3,out_dir, f"topo_map_{name}")
@@ -510,7 +517,7 @@ def main():
         out_csv = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_30min_cumsectors.csv"
         out_sum = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}_summary_cumsectors.csv"
         out_nc = f"{out_dir}/{station['Station_Name']}_{species}_{MODE}.nc"
-
+        
         ds_out = df30min_to_netcdf_station_species(
             df_30min=df_30min,station_dict=station,model_lat=model_lat,
           model_lon=model_lon,species=species, out_nc_path=out_nc,mode=MODE,          # "A" or "HEIGHT"
@@ -519,6 +526,7 @@ def main():
         print("Wrote:", out_nc)
         df_30min.to_csv(out_csv, index=False)
         df_summary.to_csv(out_sum, index=False) 
+        
         raise SystemExit 
     
 if __name__ == "__main__":

@@ -333,6 +333,39 @@ def _sort_by_pressure_with_index(p_hPa, idx_level, *arrays):
     idx_sorted = int(np.where(order == idx_level)[0][0])
 
     return (p_sorted, *sorted_arrays, idx_sorted)
+def plot_cv_cumulative_sectors(stats_unw, stats_w, title=None, ax=None):
+    """
+    Line plot of CV (unweighted vs area-weighted)
+    for cumulative sectors C1, C2, ...
+    """
+
+    cv_unw = [d["cv"] for d in stats_unw]
+    cv_w   = [d["cv_w"] for d in stats_w]
+    x = np.arange(1, len(cv_unw) + 1)
+    cv_unw=pd.to_numeric(cv_unw,errors="coerce")
+    cv_w=pd.to_numeric(cv_w,errors="coerce")
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    ax.plot(x, cv_unw * 100, marker="o", linewidth=2,
+            label="CV (unweighted)")
+    ax.plot(x, cv_w * 100 , marker="s", linewidth=2,
+            label="CV (area-weighted)")
+
+    ax.set_xlabel("Sector")
+    ax.set_ylabel("Coefficient of Variation %")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{k}" for k in x])
+    ax.grid(True, linestyle="--", alpha=0.4)
+    #ax.set_ylim(0.0,0.069)
+    ax.legend()
+
+    if title:
+        ax.set_title(title)
+
+    return fig, ax
 def plot_cv_vs_distance(df_unw, df_w=None, ax=None, title=None):
     """
     Line plot of CV vs distance.
@@ -341,14 +374,15 @@ def plot_cv_vs_distance(df_unw, df_w=None, ax=None, title=None):
         fig, ax = plt.subplots()
     else:
         fig = ax.figure
-
-    ax.plot(df_unw["dmax_km"], df_unw["cv"], marker="o", label="Unweighted")
+    df_unw['cv']=pd.to_numeric(df_unw['cv'],errors="coerce")
+    df_w['cv_w']=pd.to_numeric(df_w['cv_w'],errors="coerce")
+    ax.plot(df_unw["dmax_km"], df_unw["cv"]*100, marker="o", label="Unweighted")
     
     if df_w is not None:
-        ax.plot(df_w["dmax_km"], df_w["cv_w"], marker="s", label="Area-weighted")
+        ax.plot(df_w["dmax_km"], df_w["cv_w"]*100, marker="s", label="Area-weighted")
 
     ax.set_xlabel("Distance from station (km)")
-    ax.set_ylabel("Coefficient of Variation")
+    ax.set_ylabel("Coefficient of Variation %")
     ax.grid(True, linestyle="--", alpha=0.4)
     ax.legend()
 
@@ -356,6 +390,161 @@ def plot_cv_vs_distance(df_unw, df_w=None, ax=None, title=None):
         ax.set_title(title)
 
     return fig, ax
+
+def plot_profile_P_T(p_prof_Pa, T_prof_K, idx_level,
+                     time_str=None, ax=None,meta=None):
+    """
+    Plot vertical profile: Pressure (hPa) vs Temperature (°C)
+    for a single grid cell, with a red dot at idx_level.
+
+    Parameters
+    ----------
+    p_prof_Pa : 1D array, pressure in Pa
+    T_prof_K  : 1D array, temperature in K
+    idx_level : int, selected model level index (0-based)
+    time_str  : optional, string to show in title (e.g. '2025-12-15 00:00 UTC')
+    ax        : optional matplotlib Axes
+
+    Returns (fig, ax)
+    """
+    p_hPa = np.asarray(p_prof_Pa) / 100.0
+    T_C = np.asarray(T_prof_K) - 273.15
+
+    # Sort from surface (max p) to top (min p), track level index
+    p_sorted, T_sorted, idx_sorted = _sort_by_pressure_with_index(
+        p_hPa, idx_level, T_C
+    )
+
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    # main profile
+    ax.plot(T_sorted, p_sorted, "-o")
+
+    # red dot at selected level
+    ax.scatter(T_sorted[idx_sorted], p_sorted[idx_sorted],
+               color="red", zorder=3, label="Selected level")
+
+    ax.set_xlabel("Temperature (°C)")
+    ax.set_ylabel("Pressure (hPa)")
+    ax.set_title(build_meta_title(meta, kind="Profile T-P"))
+    ax.invert_yaxis()
+    ax.grid(True, linestyle="--", alpha=0.5)
+    ax.legend(loc="best")
+
+    return fig, ax
+
+def plot_profile_T_Z(T_prof_K, z_prof_m, idx_level,
+                     time_str=None, z_units="km", ax=None,meta=None):
+    """
+    Plot vertical profile: Temperature (°C) vs Height (Z),
+    with red dot at idx_level.
+
+    Parameters
+    ----------
+    T_prof_K  : 1D array, temperature in K
+    z_prof_m  : 1D array, height in m (ASL)
+    idx_level : int, selected model level index
+    time_str  : optional, string for title
+    z_units   : 'km' or 'm'
+    ax        : optional Axes
+
+    Returns (fig, ax)
+    """
+    T_C = np.asarray(T_prof_K) - 273.15
+    z_m = np.asarray(z_prof_m)
+
+    # sort by height ascending (surface → top)
+    order = np.argsort(z_m)
+    z_sorted = z_m[order]
+    T_sorted = T_C[order]
+    idx_sorted = int(np.where(order == idx_level)[0][0])
+
+    if z_units == "km":
+        z_vals = z_sorted / 1000.0
+        ylabel = "Height (km)"
+    else:
+        z_vals = z_sorted
+        ylabel = "Height (m)"
+
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    ax.plot(T_sorted, z_vals, "-o")
+    ax.scatter(T_sorted[idx_sorted], z_vals[idx_sorted],
+               color="red", zorder=3, label="Selected level")
+
+    ax.set_xlabel("Temperature (°C)")
+    ax.set_ylabel(ylabel)
+    ax.set_title(build_meta_title(meta, kind="Profile T–Z"))
+    ax.grid(True, linestyle="--", alpha=0.5)
+    ax.legend(loc="best")
+
+    return fig, ax
+def plot_profile_species_Z(z_prof_m, species_prof, idx_level,
+                           species_name="species", species_units="",
+                           time_str=None, z_units="km", ax=None,meta=None):
+    """
+    Plot vertical profile: species vs Height (Z),
+    with red dot at idx_level.
+
+    Parameters
+    ----------
+    z_prof_m     : 1D array, height in m (ASL)
+    species_prof : 1D array, species values
+    idx_level    : int, selected model level index
+    species_name : name of species
+    species_units: units of species
+    time_str     : optional string for title
+    z_units      : 'km' or 'm'
+    ax           : optional Axes
+
+    Returns (fig, ax)
+    """
+    z_m = np.asarray(z_prof_m)
+    sp = np.asarray(species_prof)
+
+    # sort by height ascending
+    order = np.argsort(z_m)
+    z_sorted = z_m[order]
+    sp_sorted = sp[order]
+    idx_sorted = int(np.where(order == idx_level)[0][0])
+
+    if z_units == "km":
+        z_vals = z_sorted / 1000.0
+        ylabel = "Height (km)"
+    else:
+        z_vals = z_sorted
+        ylabel = "Height (m)"
+
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    ax.plot(sp_sorted, z_vals, "-o")
+    ax.scatter(sp_sorted[idx_sorted], z_vals[idx_sorted],
+               color="red", zorder=3, label="Selected level")
+
+    xlabel = species_name
+    if species_units:
+        xlabel += f" ({species_units})"
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+    ax.set_title(build_meta_title(meta, kind="Profile concentration-Height"))
+
+
+    ax.grid(True, linestyle="--", alpha=0.5)
+    ax.legend(loc="best")
+
+    return fig, ax
+
 def plot_cv_bars_distance_both(df_cv_unw, df_cv_w, ax=None, title=None, reverse=True):
     """
     Grouped bar plot of CV vs distance bins:
@@ -410,8 +599,8 @@ def plot_cv_bars_distance_both(df_cv_unw, df_cv_w, ax=None, title=None, reverse=
         m = m.iloc[::-1].reset_index(drop=True)
 
     labels = m["label"].tolist()
-    y_unw = m["cv"].to_numpy(dtype=float)
-    y_w = m["cv_w"].to_numpy(dtype=float)
+    y_unw = m["cv"].to_numpy(dtype=float)*100
+    y_w = m["cv_w"].to_numpy(dtype=float) *100
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(9, 4))
@@ -426,7 +615,7 @@ def plot_cv_bars_distance_both(df_cv_unw, df_cv_w, ax=None, title=None, reverse=
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=0)
-    ax.set_ylabel("Coefficient of Variation")
+    ax.set_ylabel("Coefficient of Variation %")
     ax.grid(True, linestyle="--", alpha=0.35)
     if title:
         ax.set_title(title)
@@ -434,6 +623,33 @@ def plot_cv_bars_distance_both(df_cv_unw, df_cv_w, ax=None, title=None, reverse=
 
     fig.tight_layout()
     return fig, ax
+
+def plot_cv_bars_sector_both(stats_unw,stats_w, title=None, ax=None):
+    """
+     bar plot of CV (unweighted vs area-weighted)
+     for cumulative sectors C1, C2, ...
+    """
+
+    cv_unw = [d["cv"] for d in stats_unw]
+    cv_w   = [d["cv_w"] for d in stats_w]
+    x = np.arange(1, len(cv_unw) + 1)
+    cv_unw=pd.to_numeric(cv_unw,errors="coerce")*100
+    cv_w=pd.to_numeric(cv_w,errors="coerce")*100
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    width = 0.38    
+    ax.bar(x - width/2, cv_unw, width=width, label="Unweighted")
+    ax.bar(x + width/2, cv_w,   width=width, label="Area-weighted") 
+    ax.set_ylabel("Coefficient of Variation %")
+    ax.grid(True, linestyle="--", alpha=0.35)
+    if title:
+        ax.set_title(title)
+    ax.legend()   
+    return fig,ax    
+
 def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value",xlabel='Distance'):
     """
     df_ratio: DataFrame with columns ["label", "ratio"]
@@ -447,7 +663,7 @@ def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value",
     ax.axhline(1.0, linestyle="--", linewidth=1)  # reference line at 1
     ax.set_ylabel(ylabel)
     ax.set_xlabel(xlabel)
-    ax.set_ylim(0.95,1.05)
+    ax.set_ylim(0.98,1.01)
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
 
     if title:
@@ -506,7 +722,7 @@ def plot_cum_sector_ratio_timeseries(
     ax.axhline(1.0, linestyle="--", linewidth=1)
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Time")
-    ax.set_ylim(0.99,1.01)
+    ax.set_ylim(0.993,1.005)
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     ax.legend(title="Cumulative sector", ncol=2)
     if title:
@@ -606,7 +822,7 @@ def plot_cum_distance_ratio_timeseries(
     ax.axhline(1.0, linestyle="--", linewidth=1)
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Time")
-    ax.set_ylim(0.99,1.01)
+    ax.set_ylim(0.993,1.005)
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     ax.legend(title="Cumulative distance", ncol=2)
     if title:
