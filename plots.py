@@ -624,31 +624,43 @@ def plot_cv_bars_distance_both(df_cv_unw, df_cv_w, ax=None, title=None, reverse=
     fig.tight_layout()
     return fig, ax
 
-def plot_cv_bars_sector_both(stats_unw,stats_w, title=None, ax=None):
+def plot_cv_bars_sector_both(stats_unw, stats_w, title=None, ax=None):
     """
-     bar plot of CV (unweighted vs area-weighted)
-     for cumulative sectors C1, C2, ...
+    Bar plot of CV (unweighted vs area-weighted) for cumulative sectors C1, C2, ...
+    X-axis ticks: 1..N (Sector), matching the style in your image.
     """
+    cv_unw = [d.get("cv", np.nan) for d in stats_unw]
+    cv_w   = [d.get("cv_w", np.nan) for d in stats_w]
 
-    cv_unw = [d["cv"] for d in stats_unw]
-    cv_w   = [d["cv_w"] for d in stats_w]
-    x = np.arange(1, len(cv_unw) + 1)
-    cv_unw=pd.to_numeric(cv_unw,errors="coerce")*100
-    cv_w=pd.to_numeric(cv_w,errors="coerce")*100
+    cv_unw = pd.to_numeric(cv_unw, errors="coerce") * 100.0
+    cv_w   = pd.to_numeric(cv_w,   errors="coerce") * 100.0
+
+    n = len(cv_unw)
+    x = np.arange(1, n + 1)  # 1..N
+
     if ax is None:
         fig, ax = plt.subplots()
     else:
         fig = ax.figure
 
-    width = 0.38    
-    ax.bar(x - width/2, cv_unw, width=width, label="Unweighted")
-    ax.bar(x + width/2, cv_w,   width=width, label="Area-weighted") 
+    width = 0.38
+    ax.bar(x - width/2, cv_unw, width=width, label="CV (unweighted)")
+    ax.bar(x + width/2, cv_w,   width=width, label="CV (area-weighted)")
+
+    # --- match x-axis look like your screenshot ---
+    ax.set_xlabel("Sector")
+    ax.set_xticks(x)
+    ax.set_xlim(0.5, n + 0.5)   # nice margins like the line plot
+    # --------------------------------------------
+
     ax.set_ylabel("Coefficient of Variation %")
     ax.grid(True, linestyle="--", alpha=0.35)
+
     if title:
         ax.set_title(title)
-    ax.legend()   
-    return fig,ax    
+
+    ax.legend()
+    return fig, ax
 
 def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value",xlabel='Distance'):
     """
